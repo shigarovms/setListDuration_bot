@@ -211,19 +211,33 @@ def handle_track_name_to_remove(message):
     bot.send_message(message.chat.id, f'Трек "{track_name}" успешно удален')
 
 
+def format_data_like_columns(rows):
+    lens = []
+    for col in zip(*rows):
+        lens.append(max([len(v) for v in col]))
+    format = "  ".join(["{:<" + str(l) + "}" for l in lens])
+    res = ''
+    for row in rows:
+        res += (format.format(*row) + '\n')
+
+    return res
+
+
 def handle_track_list(message):
     # Сформируем из сообщения список песен
     track_list = [t.strip().lower() for t in message.text.splitlines() if t]
 
     add_not_found_songs(track_list)  # TODO переделать на пользовательский ввод сообщением
 
-    name_and_time_from_track_list = [f'{r[1]} {time_str_from_secs(r[2])}' for r in get_rows_data(track_list)]
-    answer_list = '\n'.join(name_and_time_from_track_list)
-    calc_conclusion = time_str_from_secs(calc_duration_of_all_from_tracklist(track_list)) \
-        if track_list \
-        else 'треклиста не обнаружено. \nВведите сообщение типа: \n\n/calc\ntrack 1\ntrack 2\ntrack 3'
-    # TODO сделать ответ monospaced с длинной в отдельном столбце
-    bot.send_message(message.chat.id, answer_list + '\n\n' + 'Итого выходит - ' + calc_conclusion)
+    rows_data = get_rows_data(track_list)
+    rows_data.append((0, '_____________', 0))
+    rows_data.append((0, 'Итого выходит', calc_duration_of_all_from_tracklist(track_list)))
+
+    answer_list = format_data_like_columns([(f'{r[1]}',
+                                             f'{time_str_from_secs(r[2]) if r[2] else ''}') for r in rows_data])
+
+    answer = f"```Посчитал:\n{answer_list}\n```"
+    bot.send_message(message.chat.id, answer, parse_mode='MarkdownV2')
     clear_state(message.from_user.id)
 
 

@@ -88,32 +88,6 @@ def check_if_track_is_common(track):
     return result
 
 
-def calc_duration_of_all_from_tracklist(track_list):
-    # Устанавливаем соединение с базой данных
-    connection = sqlite3.connect('CS_tracklist.db')
-    cursor = connection.cursor()
-
-    # Подготовим строку списка песен для ввода в команду
-    str_track_list_for_sql = ', '.join(f"'{i}'" for i in track_list)
-    # Выбираем длительности выбранных песен
-    query = f"SELECT SUM(duration) FROM CS_tracklist WHERE song_name IN ({str_track_list_for_sql})"
-    cursor.execute(query)
-    duration = cursor.fetchall()
-
-    # Закрываем соединение
-    connection.close()
-
-    return duration[0][0]
-
-
-def add_not_found_songs(track_list): # TODO переделать на пользовательский ввод сообщением
-    for track in track_list:
-        if not check_if_track_is_common(track):
-            song_name = track
-            duration = get_sec(input(f"Какая длительность у {track}? (M:SS): "))
-            record_db_line(song_name, duration)
-
-
 def remove_track_from_table(track_name):
     # Устанавливаем соединение с базой данных
     connection = sqlite3.connect('CS_tracklist.db')
@@ -190,28 +164,41 @@ def set_duration_of_track(duration):
 
 def handle_track_name(message):
     track_name = message.text.lower()
-    # TODO ПЕРЕПИСАТЬ КОСТЫЛЬ
-    record_db_line(track_name, -1)
-
-    set_state(message.from_user.id, 'duration')
-    bot.send_message(message.chat.id, 'Введите длительность трека в формате: M:SS.\n\nНапример 3:07')
+    msg = bot.send_message(message.chat.id, f'Введите длительность трека "{track_name}" в формате: M:SS.'
+                                            f'\n\nНапример 3:07 /cancel')
+    bot.register_next_step_handler(msg, handle_track_name_and_duration, track_name)
 
 
 def handle_duration(message):
-    duration = message.text
-    set_duration_of_track(get_sec(duration))
+    try:
+        duration = get_sec(message.text)
+        set_duration_of_track(duration)
+        bot.send_message(message.chat.id, 'Трек успешно добавлен')
+    except:
+        bot.send_message(message.chat.id, 'Неверный формат длительности. Попробуйте еще раз: /add_track')
+
     clear_state(message.from_user.id)
-    bot.send_message(message.chat.id, 'Трек успешно добавлен')
+
+
+def handle_track_name_and_duration(message, track_name):
+    try:
+        duration = get_sec(message.text)
+        record_db_line(track_name, duration)
+        bot.send_message(message.chat.id, 'Трек успешно добавлен')
+    except:
+        bot.send_message(message.chat.id, 'Неверный формат длительности. Попробуйте еще. /add_track')
+
+    clear_state(message.from_user.id)
 
 
 def handle_track_name_to_remove(message):
     track_name = message.text.lower()
     remove_track_from_table(track_name)
     clear_state(message.from_user.id)
-    bot.send_message(message.chat.id, f'Трек "{track_name}" успешно удален')
+    bot.send_message(message.chat.id, f'Трек "{track_name}" успешно удалён')
 
 
-def format_data_like_columns(rows):
+def format_data_like_columns(rows):  # TODO сделать выравнивание по времени по правому краю
     lens = []
     for col in zip(*rows):
         lens.append(max([len(v) for v in col]))
@@ -223,22 +210,60 @@ def format_data_like_columns(rows):
     return res
 
 
+def get_duration_of_track(track):
+    # Устанавливаем соединение с базой данных
+    connection = sqlite3.connect('CS_tracklist.db')
+    cursor = connection.cursor()
+
+    query = f'SELECT duration FROM CS_tracklist WHERE song_name = "{track}"'
+    result = cursor.execute(query).fetchone()
+
+    connection.close()
+
+    return result[0]
+
+
+def calc_duration_of_all_from_tracklist(track_list):
+    res = 0
+    for track in track_list:
+        if check_if_track_is_common(track):
+            res += get_duration_of_track(track)
+    return res
+
+
+def get_not_found_tracks(track_list):
+    res = []
+    for track in track_list:
+        if not check_if_track_is_common(track):
+            res.append(track)
+    return res
+
+
 def handle_track_list(message):
     # Сформируем из сообщения список песен
     track_list = [t.strip().lower() for t in message.text.splitlines() if t]
 
-    add_not_found_songs(track_list)  # TODO переделать на пользовательский ввод сообщением
+    not_found_tracks = get_not_found_tracks(track_list)
+    if len(not_found_tracks) == 0:  # TODO переделать на пользовательский ввод сообщением
 
-    rows_data = get_rows_data(track_list)
-    rows_data.append((0, '_____________', 0))
-    rows_data.append((0, 'Итого выходит', calc_duration_of_all_from_tracklist(track_list)))
+        rows_data = get_rows_data(track_list)
+        rows_data.append((0, '_____________', 0))
+        rows_data.append((0, 'Итого выходит', calc_duration_of_all_from_tracklist(track_list)))
 
-    answer_list = format_data_like_columns([(f'{r[1]}',
-                                             f'{time_str_from_secs(r[2]) if r[2] else ''}') for r in rows_data])
+        answer_list = format_data_like_columns([(f'{r[1]}',
+                                                 f'{time_str_from_secs(r[2]) if r[2] else ''}') for r in rows_data])
 
-    answer = f"```Посчитал:\n{answer_list}\n```"
-    bot.send_message(message.chat.id, answer, parse_mode='MarkdownV2')
-    clear_state(message.from_user.id)
+        answer = f"```Посчитал:\n{answer_list}\n```"
+        bot.send_message(message.chat.id, answer, parse_mode='MarkdownV2')
+        clear_state(message.from_user.id)
+
+    else:
+        answer_list = format_data_like_columns([(f'{r}', '??:??') for r in not_found_tracks])
+        answer = f"```Неизвестные:\n{answer_list}\n```"
+        bot.send_message(message.chat.id, answer, parse_mode='MarkdownV2')
+        bot.send_message(message.chat.id, 'Используйте команду /add_track , чтобы добавить новую песню')
+
+        clear_state(message.from_user.id)
 
 
 def get_rows_data(track_list=None):
@@ -264,7 +289,22 @@ def get_rows_data(track_list=None):
     return rows
 
 
-bot = telebot.TeleBot(os.environ['TOKEN'])
+bot = telebot.TeleBot(os.environ["TOKEN"])
+
+bot.set_my_commands(
+    commands=[
+        telebot.types.BotCommand('start', 'привет!'),
+        telebot.types.BotCommand('help', 'помогу, чем смогу'),
+        telebot.types.BotCommand('all', 'все песни'),
+        telebot.types.BotCommand('calc', 'длительность сетлиста'),
+        telebot.types.BotCommand('add_track', 'добавить песню'),
+        telebot.types.BotCommand('remove_track', 'удалить песню'),
+        telebot.types.BotCommand('cancel', 'отмена')
+    ]
+)
+
+bot.enable_save_next_step_handlers(delay=2)
+bot.load_next_step_handlers()
 
 create_tracks_table()
 create_states_table()
@@ -272,19 +312,19 @@ create_states_table()
 
 @bot.message_handler(commands=['start', 'help'])
 def handle_start(message):
-    bot.reply_to(message, 'Я бот, посчитаю длительность сет-листа для вашего выступления. '
+    bot.reply_to(message, 'Я бот, посчитаю длительность сетлиста для вашего выступления. '
                           'Известные мне команды: \n\n'
-                          '/calc - подсчет длительности треклиста\n'
+                          '/calc - длительность сетлиста\n'
                           '/all - все известные мне из этого чата песни\n'
-                          '/add_track - добавить новый трек\n'
-                          '/remove_track - удалить трек')
+                          '/add_track - добавить песню\n'
+                          '/remove_track - удалить песню')
 
 
 @bot.message_handler(commands=['all'])
 def handle_all(message):
     found_rows = get_rows_data()
-    answer = '\n'.join([f'{r[1]} {time_str_from_secs(r[2])}' for r in found_rows])
-    bot.send_message(message.chat.id, f"```\n{answer}\n```", parse_mode='MarkdownV2')
+    answer = format_data_like_columns([(f'{r[1]}', time_str_from_secs(r[2])) for r in found_rows])
+    bot.send_message(message.chat.id, f"```Все:\n{answer}\n```", parse_mode='MarkdownV2')
 
 
 @bot.message_handler(commands=['calc'])
@@ -298,13 +338,19 @@ def handle_calc(message):
 @bot.message_handler(commands=['add_track'])
 def handle_add_track(message):
     set_state(message.from_user.id, 'track_name')
-    bot.send_message(message.chat.id, 'Какое название трека?')
+    bot.send_message(message.chat.id, 'Какое название трека? /cancel')
 
 
 @bot.message_handler(commands=['remove_track'])
 def handle_remove(message):
     set_state(message.from_user.id, 'remove')
-    bot.send_message(message.chat.id, 'Какой трек удалить?')
+    bot.send_message(message.chat.id, 'Какой трек удалить? /cancel')
+
+
+@bot.message_handler(commands=['cancel'])
+def handle_remove(message):
+    clear_state(message.from_user.id)
+    bot.send_message(message.chat.id, 'Всё, ладно... отмена')
 
 
 @bot.message_handler(content_types=['text'])
@@ -313,14 +359,14 @@ def handle_text_message(message):
 
     if user_state == 'track_name':
         handle_track_name(message)
-    elif user_state == 'duration':
+    elif user_state == 'duration':  # Не факт что теперь нужно, когда есть next_step_handler
         handle_duration(message)
     elif user_state == 'remove':
         handle_track_name_to_remove(message)
     elif user_state == 'calc':
         handle_track_list(message)
     else:
-        bot.send_message(message.chat.id, 'Моя не понимать, изините. Справка: /help')
+        bot.send_message(message.chat.id, 'Не понял команды. Справка: /help')
 
 
 bot.polling(none_stop=True)
